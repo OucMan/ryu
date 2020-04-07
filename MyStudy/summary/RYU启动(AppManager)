@@ -1,0 +1,119 @@
+AppManager类的入口函数是：run_apps()，其中调用函数的顺序为
+
+
+get_instance() -> load_apps() -> create_contexts() -> instantiate_apps() -> hub.joinall()
+
+1、get_instance():单例模式获得AppManager类的唯一实例
+
+2、load_apps()
+
+2.1 首先获得要启动的app列表，然后对于每一个app循环操作：
+
+2.2 首先调用load_app()函数来加载app，根据app name获得对应的class，并且使用成员变量applications_cls（字典）来保存app name和对应的class。注意，applications_cls中存放的是app名称和其对应的class，此时class并没有初始化。
+
+
+2.3 通过context_iteritems获得该app的依赖服务，即app对应的类中的_CONTEXT成员变量，并将其存放在成员变量contexts_cls（字典）中，其中key为依赖服务名字，value为依赖服务对应的class。 对于该app以及每一个为RyuApp子类的依赖服务，调用get_dependent_services函数来获得_REQUIRED_APP以及事件相关的服务，即（ofp_event）。这里关于事件模块的获得很有趣，代码如下：
+
+
+def get_dependent_services(cls):
+    services = []
+    for _k, m in inspect.getmembers(cls, _is_method):
+        if _has_caller(m):
+            for ev_cls, c in m.callers.items():
+                service = getattr(sys.modules[ev_cls.__module__],
+                                  '_SERVICE_NAME', None)
+                if service:
+                    # avoid cls that registers the own events (like
+                    # ofp_handler)
+                    if cls.__module__ != service:
+                        services.append(service)
+    #其余代码
+
+首先得到app类中的方法，并查看具有Caller属性的方法（即监听事件的装饰器函数），然后获得通过getattr(sys.modules[ev_cls.__module__],'_SERVICE_NAME', None)获得定义该事件的模块名ofp_event。有意思的来了，在Ryu中，ofp_handler（一个默认启动的APP）的name恰巧是ofp_event,因此通过这个步骤将ofp_handler作为依赖服务启动起来。所有的app启动之前必须提前启动ofp_handler，因为只有ofp_handler中才启动了OpenFlowController类，并完成了数交换机的通信，也就是说ofp_handler为基础通信应用，其它应用都是在该应用之上进行功能实现（消息都是由ofp_handler分发给其它应用）。
+
+
+注：Ryu控制器使用修饰器来实现事件监听。比如，
+
+@set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
+def switch_features_handler(self, ev):
+	pass
+
+本质上为是switch_features_handler函数增加了一个Caller属性，Caller是一个字典，key为事件类，即EventOFPSwitchFeatures，value是一个_Caller对象，该对象主要就是记下dispatchers，和这个事件的模块名（即ofp_event）。
+
+2.4 将上述获得服务添加到app list中，只到所有的app加载完成。 
+
+经过load_apps()，app名字与对应的类保存到applications_cls中，依赖服务名字与对应类保存到contexts_cls中。
+
+3、create_contexts（）
+
+实例化context_cls中的context，如果这个context是app，直接通过_instantiate函数实例化该app，后者按照基本类的实例化方式实例化。并将依赖服务名字和服务实例保存到成员变量contexts（字典）中。
+
+4、instantiate_apps（）
+
+调用create_contexts函数是初始化_CONTEXT里的依赖服务（保存在context_cls中），现在调用instantiate_apps函数是对应用程序的初始化，即实例化applications_cls中保存的app。具体如下：
+
+4.1 调用_instantiate函数注册每一个应用，并将app名字和app实例存放在applications成员变量中，代码如下
+
+    def _instantiate(self, app_name, cls, *args, **kwargs):
+        #判断OPENFLOW版本是否支持
+        if hasattr(cls, 'OFP_VERSIONS') and cls.OFP_VERSIONS is not None:
+            ofproto_protocol.set_app_supported_versions(cls.OFP_VERSIONS)
+
+        if app_name is not None:
+            assert app_name not in self.applications
+        #初始化APP
+        app = cls(*args, **kwargs)
+        #注册APP
+        register_app(app)
+        assert app.name not in self.applications
+        #将app名字和app实例存放在applications成员变量中
+        self.applications[app.name] = app
+        return app
+
+    其中register_app函数将app存储在全局变量SERVICE_BRICKS中，并使用register_instance函数（位于ryu.controller.handler）注册了app中的handler。
+
+4.2 调用_update_bricks函数完成消息路由，这里其实就是ofp_handler完成消息分发功能的地方。
+
+def _update_bricks(self):
+		#遍历所有的app实例
+        for i in SERVICE_BRICKS.values():
+            for _k, m in inspect.getmembers(i, inspect.ismethod):
+                #只处理装饰器函数
+                if not hasattr(m, 'callers'):
+                    continue
+                for ev_cls, c in m.callers.items():
+                    if not c.ev_source:
+                        continue
+                    #找到定义事件的模块的名称找到对应的服务。
+                    #事件是在ofp_event.py文件中定义的，因此c.ev_source=ofp_event
+                    #ofp_handler初始化过程中定义自己的name为ofp_event
+                    #因此_lookup_service_brick_by_mod_name（'ofp_event'）为ofp_handler
+                    #ofp_handler作为基础模块，将每个应用监听事件的情况保存到自己的成员变量observers中，当收到事件时，调用send_event_to_observers函数将事件发送到对应的app，完成事件路由
+                    brick = _lookup_service_brick_by_mod_name(c.ev_source)
+                    if brick:
+                        brick.register_observer(ev_cls, i.name,
+                                                c.dispatchers)
+
+                    # allow RyuApp and Event class are in different module
+                    for brick in SERVICE_BRICKS.values():
+                        if ev_cls in brick._EVENTS:
+                            brick.register_observer(ev_cls, i.name,
+                                                    c.dispatchers)
+
+4.3 然后遍历applications成员变量，调用start函数启动每一个app，并设置每一个app的主线程。
+
+
+5、 hub.joinall()：将所有的应用作为任务，作为coroutine的task去执行，join使得程序必须等待所有的task都执行完成才可以退出程序。
+
+综上，整个RYU程序的启动可以分为：APP的加载，上下文环境的加载，订阅事件的注册与分发几个步骤，具体的，
+
+1、初始化APP管理类，AppManager
+2、 生成APP服务列表（并不实例化），只是保存在对应字典中，self.applications_cls[app_cls_name] = cls,保存每个APP的名字和第一个功能类（满足是RyuApp子类等条件）
+3、加载每个app所依赖的模块，保存在contexts_cls.setdefault(key, context_cls)
+4、实例化依赖模块,即contexts_cls中的类。
+5、实例化APPs。需要实例化的APP保存在applications_cls字典中。创建以下数据结构，一是SERVICE_BRICKS[app.name] = app表示服务链，二是所有订阅事件集合event_handlers，保存事件和触发函数的字典。三是observers字典，注册在OFPHander中，key是en_cls事件类，value为字典，其中key为类的名称，value为一个集合，其中保存的states。
+6、运行每一个APP，并以协程方式管理。要注意的是 OFPHander重写了start函数，在该函数中启动了控制器类。
+
+参考
+https://www.jianshu.com/p/5a9f1bc428d3
+https://www.jianshu.com/p/f03a29025b95?utm_campaign=maleskine&utm_content=note&utm_medium=seo_notes&utm_source=recommendation
