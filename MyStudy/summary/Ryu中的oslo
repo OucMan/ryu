@@ -1,0 +1,65 @@
+Ryu oslo-config学习
+
+oslo-config是一个命令行解析库，可以用于CLI和CONF的解析。
+
+在ryu/ryu目录下的cfg.py文件中import了oslo-config的相关模块（import oslo_config.cfg）,并在该文件中定义了一个ConfigOpts类，通过该类完成了命令行和配置参数的解析。
+
+下面通过一个实例还讲述oslo-config库的使用：
+
+1、首先创建一个test.conf和test.py。其中test.conf中保存配置，包括两个group（simple和morestuff），simple组中包括一个BoolOpt类型的选项enable，morestuff组中包括StrOpt类型的选项message，ListOpt类型的选项username等。test.py用来调用oslo-config库解析这个配置文件。
+
+2、test.conf的具体内容如下：
+
+[simple]
+
+enable = True
+
+[morestuff]
+
+#StrOpt
+message = Hello world
+
+#ListOpt
+usernames = ['xujianfeng', 'luzhezhe']
+
+#DictOpt
+jobtitles = {'xujianfeng':'CEO','luzhezhe':'CFO'}
+
+#IntOpt
+payday = 20
+
+#FloatOpt
+pi = 3.1415
+
+3、test.py的代码如下：
+
+from oslo_config import cfg
+
+simple_group = cfg.OptGroup(name='simple', title='A simple example')
+morestuff_group = cfg.OptGroup(name='morestuff', title='A more complex example')
+
+simple_opts = [
+    cfg.BoolOpt('enable', default=False, help=('True enables, False disables'))
+]
+
+morestuff_opts = [
+    cfg.StrOpt('message', default='No data', help=('A message')),
+    cfg.ListOpt('usernames', default=None, help=('A list of names')),
+    cfg.DictOpt('jobtitles', default=None, help=('A dictionary of usernames and jobs')),
+    cfg.IntOpt('payday', default=30, help=('Default payday monthly date')),
+    cfg.FloatOpt('pi', default=0.0, help=('The value of pi'))
+]
+
+CONF = cfg.CONF
+CONF.register_group(simple_group)
+CONF.register_opts(simple_opts, simple_group)
+CONF.register_group(morestuff_group)
+CONF.register_opts(morestuff_opts, morestuff_group)
+
+if __name__ == '__main__':
+    CONF(default_config_files=['test.conf'])
+    print('simple enable: {}'.format(CONF.simple.enable))
+    #其它参数
+
+
+
