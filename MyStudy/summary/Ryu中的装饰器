@@ -1,0 +1,301 @@
+Ryu中使用了大量的python装饰器来实现对OpenFlow事件的监听。我们首先介绍一个Python装饰器的内容，然后分析Ryu控制器中装饰器的使用。
+
+Python装饰器
+
+python装饰器（decorator）就是用于扩展原有函数功能的一种函数，目的是在不改变原函数名（类名）的情况下，给函数增加新的功能。这个函数的特殊之处在于它的返回值也是一个函数，这个函数是内嵌“原”函数的函数。 我们分类讲解不同类型的装饰器。
+
+1、基础装饰器
+
+假如我们要在调用每个函数前都要记录进入的函数名称，如为下面的say_hello函数增加这个功能
+
+def debug(func):
+    def wrapper():
+        print('[DEBUG]: enter {}()'.format(func.__name__))
+        return func()
+    return wrapper
+
+@debug
+def say_hello():
+    print('hello!')
+
+if __name__ == '__main__':
+    say_hello()
+
+假如被装饰的函数需要传入参数，那么可以指定装饰器函数wrapper结构和原函数一样的参数，比如
+
+def debug(func):
+    def wrapper(something):
+        print('[DEBUG]: enter {}()'.format(func.__name__))
+        return func(something)
+    return wrapper
+
+@debug
+def say(something):
+    print('hello {}!'.format(something))
+
+if __name__ == '__main__':
+    say('python')
+
+一个装饰器往往会负责多个函数，而每个函数的参数个数可能不同，因此可以为装饰器函数wrapper指定可变参数*args和关键字参数**kwargs，有了这两个参数，装饰器就可以用于任意目标函数了，如
+
+def debug(func):
+    def wrapper(*args, **kwargs):
+        print('[DEBUG]: enter {}()'.format(func.__name__))
+        return func(*args, **kwargs)
+    return wrapper
+
+@debug
+def say(something):
+    print('hello {}!'.format(something))
+@debug
+def talk(somebody, something):
+    print('talk with {} {}'.format(somebody, something))
+
+if __name__ == '__main__':
+    say('python')
+    talk('java','python')
+
+
+2、带参数的装饰器
+
+假如增加的功能不仅可以打印出进入某个函数的log信息，而且还可以指定log的级别，那么我们需要为装饰器加上参数，如下：
+
+def logging(level):
+    def wrapper(func):
+        def inner_wrapper(*args, **kwargs):
+            print('[{level}]: enter {func}()'.format(level=level, func=func.__name__))
+            return func(*args, **kwargs)
+        return inner_wrapper
+    return wrapper
+
+@logging(level='INFO')
+def say(something):
+    print('hello {}!'.format(something))
+
+if __name__ == '__main__':
+    say('python')
+
+
+3、基于类实现的装饰器
+
+使用一个类的构造函数__init__()接收一个函数，然后重载__call__()并返回一个函数也可以达到装饰器函数的效果，如下：
+
+class logging(object):
+    def __init__(self, func):
+        self.func = func
+    def __call__(self, *args, **kwargs):
+        print('[DEBUG]: enter function {func}()'.format(func=self.func.__name__))
+        return self.func(*args, **kwargs)
+
+@logging
+def say(something):
+    print('hello {}!'.format(something))
+
+if __name__ == '__main__':
+    say('python')
+
+4、带参数的类装饰器
+
+如果需要通过类形式实现带参数的装饰器，那么需要在类的构造函数__init__()里面接收传入的参数，而不是原函数。通过类把这个参数保存起来，然后在重载__call__方法时接收原函数，并返回一个函数。
+
+class logging(object):
+    def __init__(self, level):
+        self.level = level
+    def __call__(self, func):
+        def wrapper(*args, **kwargs):
+            print('[{level}]: enter function {func}()'.format(level=self.level, func=func.__name__))
+            return func(*args, **kwargs)
+        return wrapper
+
+@logging(level='INFO')
+def say(something):
+    print('hello {}!'.format(something))
+
+if __name__ == '__main__':
+    say('python')
+
+5、内置的装饰器
+
+在Python中有三个内置的装饰器，都是跟class相关的：staticmethod、classmethod 和property。
+
+5.1 staticmethod 是类静态方法，其跟成员方法的区别是没有self参数，并且可以在类不进行实例化的情况下调用
+
+import time
+class Date:
+    def __init__(self,year,month,day):
+        self.year=year
+        self.month=month
+        self.day=day
+
+    @staticmethod
+    def now(): #用Date.now()的形式去产生实例,该实例用的是当前时间
+        t=time.localtime() #获取结构化的时间格式
+        return Date(t.tm_year,t.tm_mon,t.tm_mday) #新建实例并且返回
+
+
+    @staticmethod
+    def tomorrow():#用Date.tomorrow()的形式去产生实例,该实例用的是明天的时间
+        t=time.localtime(time.time()+86400)
+        return Date(t.tm_year,t.tm_mon,t.tm_mday)
+
+a=Date('1987',11,27) #自己定义时间
+print(a.year,a.month,a.day)
+b=Date.now() #采用当前时间
+print(b.year,b.month,b.day)
+c=Date.tomorrow() #采用明天的时间
+print(c.year,c.month,c.day)
+
+
+5.2 classmethod修饰的方法不需要实例化，不需要 self 参数，但第一个参数需要是表示自身类的 cls 参数，可以来调用类的属性，类的方法，实例化对象等。
+
+class A():
+    number = 10
+
+    @classmethod
+    def get_a(cls):     #cls 接收的是当前类，类在使用时会将自身传入到类方法的第一个参数
+        print('这是类本身：',cls)# 如果子类调用，则传入的是子类
+        print('这是类属性:',cls.number)
+
+class B(A):
+    number = 20
+    pass
+
+# 调用类方法 不需要实例化可以执行调用类方法
+A.get_a()
+B.get_a()
+
+
+5.3 property 可以把一个实例方法变成其同名属性，以支持实例访问，它返回的是一个property属性,通过property装饰后的方法也可以像访问数据属性一样去访问。
+
+import math
+class Circle(object):
+    def __init__(self, r):
+        self.radius = r
+    @property
+    def area(self):
+        return math.pi * self.radius**2
+
+    def perimeter(self):
+        return 2 * math.pi * self.radius
+
+c = Circle(10)
+#直接访问成员变量
+print(c.radius)
+#像访问成员变量一样访问函数
+print(c.area)
+#普通的成员函数访问
+print(c.perimeter())
+
+一个property对象还具有setter、deleter 可用作装饰器；setter是设置属性值。deleter用于删除属性值。而官方文档中给出了getter用于获取属性信息，但是实际使用中可以直接通过property获取属性信息；
+
+class Circle(object):
+    def __init__(self):
+        self._radius = None
+
+    @property
+    def radius(self):
+        return self._radius
+
+    @radius.setter
+    def radius(self, value):
+        self._radius = value
+
+    @radius.deleter
+    def radius(self):
+        del self._radius
+
+c = Circle()
+# 为属性进行赋值
+c._radius=100
+# 输出属性值
+print(c._radius)
+# 删除属性
+del c._radius
+
+注：成员变量前面必须有_。
+
+教训：
+
+1、最好不要在装饰器函数之外添加逻辑功能，否则这个装饰器就不受你控制了
+
+2、装饰器装饰过的函数看上去名字没变，其实已经变了（函数名已经变成了装饰器函数名），使用标准库里的functools.wraps，可以基本解决这个问题。
+
+from functools import wraps
+import datetime
+
+def logging(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        print ("[DEBUG] {}: enter {}()".format(datetime.now(), func.__name__))
+        return func(*args, **kwargs)
+    return wrapper
+
+@logging
+def say(something):
+    """say something"""
+    print ("say {}!".format(something))
+
+print (say.__name__ )
+print (say.__doc__)
+
+但是上述方式还是无法得到函数的签名和源码，为了实现这个功能可以使用第三方包wrapt，这里不再介绍
+
+
+Ryu中的装饰器
+
+
+比如在simple_switch_3.py中对Feature消息的监听代码如下：
+
+@set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
+    def switch_features_handler(self, ev):
+        datapath = ev.msg.datapath
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+
+        # install the table-miss flow entry.
+        match = parser.OFPMatch()
+        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
+                                          ofproto.OFPCML_NO_BUFFER)]
+        self.add_flow(datapath, 0, match, actions)
+
+属于带参数的装饰器函数，查看set_ev_cls函数
+
+def set_ev_cls(ev_cls, dispatchers=None):
+    def _set_ev_cls_dec(handler):
+        if 'callers' not in dir(handler):
+            handler.callers = {}
+        for e in _listify(ev_cls):
+            handler.callers[e] = _Caller(_listify(dispatchers), e.__module__)
+        return handler
+    return _set_ev_cls_dec
+
+set_ev_cls函数接收两个参数，第一个代表需要监听的事件，第二个参数表示该事件在交换机与控制器交互的哪个阶段发生有以下四个取值：
+
+HANDSHAKE_DISPATCHER = "handshake"
+CONFIG_DISPATCHER = "config"
+MAIN_DISPATCHER = "main"
+DEAD_DISPATCHER = "dead"
+
+上述装饰器的作用就是：首先switch_features_handler作为参数传递给 _set_ev_cls_dec函数，先判断该函数有没有callers属性（因为同一函数也可能被其他事件触发），若没有则添加该属性。 callers是一个字典，键值key是传入的事件类对应的列表形式，这里就是[ofp_event.EventOFPSwitchFeatures]，value是一个_Caller对象，该对象主要就是记下dispatchers，和这个事件的模块名。
+_Caller函数原型为：
+
+class _Caller(object):
+    """Describe how to handle an event class.
+    """
+
+    def __init__(self, dispatchers, ev_source):
+        """Initialize _Caller.
+
+        :param dispatchers: A list of states or a state, in which this
+                            is in effect.
+                            None and [] mean all states.
+        :param ev_source: The module which generates the event.
+                          ev_cls.__module__ for set_ev_cls.
+                          None for set_ev_handler.
+        """
+        self.dispatchers = dispatchers
+        self.ev_source = ev_source
+
+总结下来完成的工作就是给switch_features_handler函数添加了一个callers字典属性，里面保存了自己感兴趣的事件和dispatcher。
+
+后面根据handler的caller属性完成handler注册和observer注册,如前文所述。
