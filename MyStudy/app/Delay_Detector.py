@@ -104,3 +104,55 @@ class NetworkDelayDetector(app_manager.RyuApp):
         self.logger.info("---------------------------")
         for item in self.delay:
             self.logger.info("%s<-->%s : %s" % (item[0], item[1], self.delay[item]))
+     
+
+'''
+Make some changes in topology/switches.py:
+
+1、Add self.delay for PortData in topology/switches.py module.
+class PortData(object):
+      def __init__(self, is_down, lldp_data):
+          super(PortData, self).__init__()
+          self.is_down = is_down
+          self.lldp_data = lldp_data
+          self.timestamp = None
+          self.sent = 0
+          self.delay = 0
+2、 Add delay calculation code in Class Switches in topology/switches.py module.
+
+@set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
+  def packet_in_handler(self, ev):
+  	# add code for getting LLDP packet receiving timestamp
+      recv_timestamp = time.time()
+      if not self.link_discovery:
+          return
+
+      msg = ev.msg
+      try:
+          src_dpid, src_port_no = LLDPPacket.lldp_parse(msg.data)
+      except LLDPPacket.LLDPUnknownFormat as e:
+          # This handler can receive all the packtes which can be
+          # not-LLDP packet. Ignore it silently
+          return
+
+      dst_dpid = msg.datapath.id
+      if msg.datapath.ofproto.OFP_VERSION == ofproto_v1_0.OFP_VERSION:
+          dst_port_no = msg.in_port
+      elif msg.datapath.ofproto.OFP_VERSION >= ofproto_v1_2.OFP_VERSION:
+          dst_port_no = msg.match['in_port']
+      else:
+          LOG.error('cannot accept LLDP. unsupported version. %x',
+                    msg.datapath.ofproto.OFP_VERSION)
+
+      # get the lldp delay, and save it into port_data.
+      for port in self.ports.keys():
+          if src_dpid == port.dpid and src_port_no == port.port_no:
+              send_timestamp = self.ports[port].timestamp
+              if send_timestamp:
+                  self.ports[port].delay = recv_timestamp - send_timestamp
+                  
+3、reinstall Ryu ： sudo python setup.py install 
+
+4、ryu-manager Delay_Detector.py --observe-links
+
+'''
