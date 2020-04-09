@@ -1,0 +1,303 @@
+REST，即表征性状态传输（英文：Representational State Transfer，简称REST）是一种WEB开发中流程的软件架构风格。REST架构风格中，任何的对象都看作资源，资源是通过URI来描述的。对资源的增删改查采用了HTTP的GET，POST，PUT和DELETE方法相对应。REST的架构是Client-Server架构，同时链接是无状态的，所以要求在传输的过程中需要包含状态信息。此外，利用cache机制增进性能。
+
+RYU已经完成了一些RESTAPI的定义，我们可以直接拿来使用，比如在ryu的app目录，可以发现许多rest相关的文件，比如ofctl_rest.py，rest.py,和rest_topology.py等。其中rest.py提供了基本的RESTAPI，ofctl_rest.py提供了与OpenFlow相关的RESTAPI，如查看、添加、修改流表等API。以ofctl_rest.py举例如何使用RYU中的RESTAPI。
+
+查看ofctl_rest.py的注释，可以看到API的使用，如：
+
+# get the list of all switches
+# GET /stats/switches
+#
+# get the desc stats of the switch
+# GET /stats/desc/<dpid>
+#
+# get flows desc stats of the switch
+# GET /stats/flowdesc/<dpid>
+#
+# get flows desc stats of the switch filtered by the fields
+# POST /stats/flowdesc/<dpid>
+#
+# get flows stats of the switch
+# GET /stats/flow/<dpid>
+#
+# get flows stats of the switch filtered by the fields
+# POST /stats/flow/<dpid>
+#
+# get aggregate flows stats of the switch
+# GET /stats/aggregateflow/<dpid>
+#
+# get aggregate flows stats of the switch filtered by the fields
+# POST /stats/aggregateflow/<dpid>
+#
+# get table stats of the switch
+# GET /stats/table/<dpid>
+#
+# get table features stats of the switch
+# GET /stats/tablefeatures/<dpid>
+#
+
+使用：
+
+1、利用ryu-manager ofctl_rest.py simple_switch_13.py启动程序
+
+2、可以使用curl命令来执行rest api，或者利用chrome插件POSTMAN来操作RESTAPI，如通过	
+http://localhost:8080/stats/flow/1来查看dpid为1的交换机上的流表信息。
+
+原理：
+
+Ryu控制器中实现了符合WSGI规范的服务器来实现Rest API。 通俗的讲，WSGI 规范了一种简单的接口，解耦了 server 和 application，使得双边的开发者更加专注自身特性的开发，因此它也是一种协议。
+
+WSGI协议主要包括server和application两部分：
+
+Web server/gateway: 即 HTTP Server，处理 HTTP 协议，接受用户 HTTP 请求和提供并发，调用 web application 处理业务逻辑。通常采用 C/C++ 编写，代表：apache, nginx 和 IIS。WSGI server负责从客户端接收请求，将request转发给application，将application返回的response返回给客户端；
+
+Python Web application/framework: WSGI application接收由server转发的request，处理请求，并将处理结果返回给server。application中可以包括多个栈式的中间件(middlewares)，这些中间件需要同时实现server与application，因此可以在WSGI服务器与WSGI应用之间起调节作用：对服务器来说，中间件扮演应用程序，对应用程序来说，中间件扮演服务器。
+
+注：WSGI协议其实是定义了一种server与application解耦的规范，即可以有多个实现WSGI server的服务器，也可以有多个实现WSGI application的框架，那么就可以选择任意的server和application组合实现自己的web应用。例如uWSGI和Gunicorn都是实现了WSGI server协议的服务器，Django，Flask是实现了WSGI application协议的web框架，可以根据项目实际情况搭配使用。
+
+Application/Framework
+
+Application/framework 端必须定义一个 callable object，callable object 可以是以下三者之一：function，class和instance with a __call__ method。
+
+Callable object 必须满足以下两个条件：
+接受两个参数：字典(environ，包含所有HTTP请求信息的dict对象)，回调函数(start_response，返回 HTTP status，headers 给 web server)
+返回一个可迭代的值
+
+基于 callable function 的 application/framework 样例如下：
+
+def application(environ, start_response):
+    start_response('200 OK', [('Content-Type', 'text/plain')])
+    return ['This is a python application!']
+
+基于 callable class 的 application/framework 样例如下：
+
+class ApplicationClass(object):
+    def __init__(self, environ, start_response):
+        self.environ = environ
+        self.start_response = start_response
+ 
+    def __iter__(self):
+        self.start_response('200 OK', [('Content-type', 'text/plain')])
+        yield "Hello world!n"
+
+
+Server/Gateway
+
+Server/gateway 端主要专注 HTTP 层面的业务，重点是接收 HTTP 请求和提供并发。每当收到 HTTP 请求，server/gateway 必须调用 callable object：
+
+接收 HTTP 请求，但是不关心 HTTP url, HTTP method 等
+为 environ 提供必要的参数，实现一个回调函数 start_response，并传给 callable object
+调用 callable object
+
+简单实例：
+# application/framework side
+def application(environ, start_response):
+    start_response('200 OK', [('Content-Type', 'text/plain')])
+    return ['This is a python application!']
+ 
+# server/gateway side
+if __name__ == '__main__':
+    from wsgiref.simple_server import make_server
+    server = make_server('0.0.0.0', 8080, application)
+    server.serve_forever()
+
+注：在application()函数中，调用start_response函数发送HTTP响应的Header，注意Header只能发送一次，也就是只能调用一次start_response()函数。start_response()函数接收两个参数，一个是HTTP响应码，一个是一组list表示的HTTP Header，每个Header用一个包含两个str的tuple表示。通常情况下，都应该把Content-Type头发送给浏览器。其他很多常用的HTTP Header也应该发送。然后，函数的返回值'This is a python application!'将作为HTTP响应的Body发送给浏览器。
+
+因此WSGI服务器通过调用application（）来处理HTTP请求，application()函数从environ这个dict对象拿到HTTP请求信息，然后构造HTML，通过start_response()发送Header，最后返回Body。
+
+下面修改application函数来获得HTTP请求中的参数。
+
+def application(environ, start_response):
+    start_response('200 OK', [('Content-Type', 'text/html')])
+    body = '<h1>Hello, %s!</h1>' % (environ['PATH_INFO'][1:] or 'web')
+    return [body.encode('utf-8')]
+
+
+实现限制访问的中间件
+
+class IPBlacklistMiddleware(object):
+    def __init__(self, app):
+        self.app = app
+ 
+    def __call__(self, environ, start_response):
+        ip_addr = environ.get('HTTP_HOST').split(':')[0]
+        if ip_addr not in ('127.0.0.1'):
+            return forbidden(start_response)
+ 
+        return self.app(environ, start_response)
+ 
+def forbidden(start_response):
+    start_response('403 Forbidden', [('Content-Type', 'text/plain')])
+    return ['Forbidden']
+ 
+def application(environ, start_response):
+    start_response('200 OK', [('Content-Type', 'text/plain')])
+    return ['This is a python application!']
+ 
+if __name__ == '__main__':
+    from wsgiref.simple_server import make_server
+    application = IPBlacklistMiddleware(application)
+    server = make_server('0.0.0.0', 8080, application)
+    server.serve_forever()
+
+根据不同的路由执行不同的函数
+
+由于 WSGI 框架下的 server/gateway 不处理 url 和 method，所以 url mapping 需由 application/framework 端完成。注意到参数 environ，它包含以下变量：REQUEST_METHOD: 即 HTTP method和PATH_INFO: 即 HTTP url。
+所以 application/framework 可以根据 environ 的 REQUEST_METHOD 和 PATH_INFO 实现 path dispatch，
+
+class IPBlacklistMiddleware(object):
+    def __init__(self, app):
+        self.app = app
+ 
+    def __call__(self, environ, start_response):
+        ip_addr = environ.get('HTTP_HOST').split(':')[0]
+        if ip_addr not in ('127.0.0.1'):
+            return forbidden(start_response)
+ 
+        return self.app(environ, start_response)
+ 
+def dog(start_response):
+    start_response('200 OK', [('Content-Type', 'text/plain')])
+    return ['This is dog!']
+ 
+def cat(start_response):
+    start_response('200 OK', [('Content-Type', 'text/plain')])
+    return ['This is cat!']
+ 
+def not_found(start_response):
+    start_response('404 NOT FOUND', [('Content-Type', 'text/plain')])
+    return ['Not Found']
+ 
+def forbidden(start_response):
+    start_response('403 Forbidden', [('Content-Type', 'text/plain')])
+    return ['Forbidden']
+ 
+def application(environ, start_response):
+    path = environ.get('PATH_INFO', '').lstrip('/')
+    mapping = {'dog': dog, 'cat': cat}
+ 
+    call_back = mapping[path] if path in mapping else not_found
+    return call_back(start_response)
+ 
+if __name__ == '__main__':
+    from wsgiref.simple_server import make_server
+    application = IPBlacklistMiddleware(application)
+    server = make_server('0.0.0.0', 8080, application)
+    server.serve_forever()
+
+在Ryu中，负责实现Rest API的应用中需要通过_CONTEXT将WSGIApplication作为依赖服务加载进来。在RYU启动时，
+main函数中通过webapp = wsgi.start_service(app_mgr)命令启动了WSGIServer。至此实现wsgi的服务器和应用基类全部加载完成。然后就可以在自己开发的应用中使用基类WSGIApplication中的routes模块的Mapper和URLGenerator来完成URL的路由和URL的产生。整体流程就是：
+
+WSGIServer负责将HTTP请求发送到WSGIApplication。WSGIApplication收到请求之后，通过mapper，将对应的请求分发给制定的处理函数。处理函数解析请求，并回复请求。
+
+实例：ofctl_rest.py中mapper路由的实现
+
+path='stats'
+uri = path + '/flow/{dpid}'
+mapper.connect('stats', uri,controller=StatsController, action='get_flow_stats',conditions=dict(method=['GET', 'POST']))
+
+映射的分类属于stats分类，或者路径为stats。uri为/stats/flow/{dpid},dpid数值将在请求中被实例化为某一数值。交给的controller是StatsController，action是该类的get_flow_stats函数，请求的类型是GET或者POST，具体种类由请求明确。
+
+我们在自己开发REST程序时，需要定义两个类，一个类继承ControllerBase，实现对于每一个url的处理函数。一个类通过_CONTEXTS将WSGIApplication作为依赖服务添加进来，并注册ControllerBase类。
+
+
+RYUBOOK中的实例
+
+import json
+
+from ryu.app import simple_switch_13
+from webob import Response
+from ryu.controller import ofp_event
+from ryu.controller.handler import CONFIG_DISPATCHER
+from ryu.controller.handler import set_ev_cls
+from ryu.app.wsgi import ControllerBase, WSGIApplication, route
+from ryu.lib import dpid as dpid_lib
+
+simple_switch_instance_name = 'simple_switch_api_app'
+url = '/simpleswitch/mactable/{dpid}'
+
+
+class SimpleSwitchRest13(simple_switch_13.SimpleSwitch13):
+
+    _CONTEXTS = {'wsgi': WSGIApplication}
+
+    def __init__(self, *args, **kwargs):
+        super(SimpleSwitchRest13, self).__init__(*args, **kwargs)
+        self.switches = {}
+        wsgi = kwargs['wsgi']
+        wsgi.register(SimpleSwitchController,
+                      {simple_switch_instance_name: self})
+
+    @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
+    def switch_features_handler(self, ev):
+        super(SimpleSwitchRest13, self).switch_features_handler(ev)
+        datapath = ev.msg.datapath
+        self.switches[datapath.id] = datapath
+        self.mac_to_port.setdefault(datapath.id, {})
+
+    def set_mac_to_port(self, dpid, entry):
+        mac_table = self.mac_to_port.setdefault(dpid, {})
+        datapath = self.switches.get(dpid)
+
+        entry_port = entry['port']
+        entry_mac = entry['mac']
+
+        if datapath is not None:
+            parser = datapath.ofproto_parser
+            if entry_port not in mac_table.values():
+
+                for mac, port in mac_table.items():
+
+                    # from known device to new device
+                    actions = [parser.OFPActionOutput(entry_port)]
+                    match = parser.OFPMatch(in_port=port, eth_dst=entry_mac)
+                    self.add_flow(datapath, 1, match, actions)
+
+                    # from new device to known device
+                    actions = [parser.OFPActionOutput(port)]
+                    match = parser.OFPMatch(in_port=entry_port, eth_dst=mac)
+                    self.add_flow(datapath, 1, match, actions)
+
+                mac_table.update({entry_mac: entry_port})
+        return mac_table
+
+
+class SimpleSwitchController(ControllerBase):
+
+    def __init__(self, req, link, data, **config):
+        super(SimpleSwitchController, self).__init__(req, link, data, **config)
+        self.simple_switch_app = data[simple_switch_instance_name]
+
+    @route('simpleswitch', url, methods=['GET'],
+           requirements={'dpid': dpid_lib.DPID_PATTERN})
+    def list_mac_table(self, req, **kwargs):
+
+        simple_switch = self.simple_switch_app
+        dpid = dpid_lib.str_to_dpid(kwargs['dpid'])
+
+        if dpid not in simple_switch.mac_to_port:
+            return Response(status=404)
+
+        mac_table = simple_switch.mac_to_port.get(dpid, {})
+        body = json.dumps(mac_table)
+        return Response(content_type='application/json', body=body)
+
+    @route('simpleswitch', url, methods=['PUT'],
+           requirements={'dpid': dpid_lib.DPID_PATTERN})
+    def put_mac_table(self, req, **kwargs):
+
+        simple_switch = self.simple_switch_app
+        dpid = dpid_lib.str_to_dpid(kwargs['dpid'])
+        try:
+            new_entry = req.json if req.body else {}
+        except ValueError:
+            raise Response(status=400)
+
+        if dpid not in simple_switch.mac_to_port:
+            return Response(status=404)
+
+        try:
+            mac_table = simple_switch.set_mac_to_port(dpid, new_entry)
+            body = json.dumps(mac_table)
+            return Response(content_type='application/json', body=body)
+        except Exception as e:
+            return Response(status=500)
