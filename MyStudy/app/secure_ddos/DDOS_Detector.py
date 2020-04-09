@@ -21,7 +21,7 @@ ATTACK_TRAFFIC = 1
 # the file (dpid + filename) saves the information about the switch dpid
 filename = "detector_result.log"
 traffic_label = NORMAL_TRAFFIC
-model_dir = ''
+model_dir = 'model_tf_svm.m'
 
 class DDOS_Detector(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
