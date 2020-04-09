@@ -83,7 +83,11 @@ class FireWall(app_manager.RyuApp):
                 if ipv4_proto == in_proto.IPPROTO_TCP:
                     pkt_tcp = pkt.get_protocol(tcp.tcp)
                     if pkt_tcp.bits == tcp.TCP_SYN and ipv4_src not in self.internal_host:
-                        return
+                        #增加优先级高一些的流表项，（src, dst, tcp, syn, drop）
+                        actions = []
+                        match = ofp_parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ip_proto=ipv4_proto,
+                                                ipv4_src=ipv4_src, ipv4_dst=ipv4_dst, tcp_flags=tcp.TCP_SYN)
+                        self.add_flow(datapath, 10, match, actions)
                 if ipv4_dst in self.ip_to_port[dpid]:
                     out_port = self.ip_to_port[dpid][ipv4_dst]
                 else:
